@@ -285,21 +285,57 @@ Append to every row. Keep all original Apollo columns intact and in original ord
 
 ## FILE I/O (Routine context)
 
-You are running as a scheduled Claude Code Routine inside a GitHub repository. Follow these file rules exactly.
+You are running as a scheduled Claude Code Routine inside a GitHub repository. Follow these rules exactly every run.
 
-**Input:** Read prospects from `input/prospects.csv`. This file is updated by the user before each run. Do not modify it.
+---
 
-**Output:** After completing all leads, write the enriched CSV to `output/enriched-YYYY-MM-DD.csv` where YYYY-MM-DD is today's date. Use the exact column structure from STEP 8.
+### BATCH WORKFLOW
 
-**Knowledge base:** The `knowledge-base/` folder contains supporting documents about Sluqe. Read them at the start of each session to inform scoring and hook tone.
+The input file may contain up to 300 leads. You process 30 per run. Progress is tracked in Google Drive so leads are never processed twice.
 
-**Commit:** After writing the output file, run these git commands:
+**Step 1 - Read knowledge base**
+Read all files in `knowledge-base/` before processing any leads.
+
+**Step 2 - Read input**
+Read `input/prospects.csv` from the repo. Count total rows (excluding header).
+
+**Step 3 - Read progress tracker from Google Drive**
+Look for a file named `sluqe-progress.json` in Google Drive.
+- If it exists: read it. It contains `{"last_processed_row": N, "total_rows": M}` where N is the last row index already processed (1-indexed, header = row 0).
+- If it does not exist: create it with `{"last_processed_row": 0, "total_rows": 0}`.
+
+**Step 4 - Determine this run's batch**
+- Start row = last_processed_row + 1
+- End row = start row + 29 (max 30 leads)
+- If start row > total rows in input: all leads are done. Go to STEP 8 (completion notification). Do not process anything.
+- If end row > total rows: process only up to the last row.
+
+**Step 5 - Process the batch**
+Run the full research, scoring, tier assignment, and hook generation (Steps 1-8 of the main instructions) for this batch only. Print progress updates as normal.
+
+**Step 6 - Save output to Google Drive**
+Write the enriched CSV for this batch to Google Drive as `sluqe-enriched-YYYY-MM-DD.csv` (today's date). Use the exact column structure from STEP 8. Do not commit to GitHub.
+
+**Step 7 - Update progress tracker in Google Drive**
+Overwrite `sluqe-progress.json` in Google Drive with:
 ```
-git add output/
-git commit -m "Enrichment run YYYY-MM-DD - [X] leads processed ([X] HOT, [X] WARM, [X] COLD, [X] DISQUALIFIED)"
-git push
+{"last_processed_row": [new end row], "total_rows": [total rows in input]}
 ```
 
-Replace YYYY-MM-DD and the counts with actual values from the run.
+**Step 8 - Check for completion**
+If last_processed_row >= total_rows after this run:
+- All leads have been processed.
+- Send an email to shadheenarman@gmail.com with subject "Sluqe Enrichment Complete" and body: "All [X] leads have been processed across [Y] runs. Your enriched files are saved to Google Drive."
+- Overwrite `sluqe-progress.json` with `{"last_processed_row": 0, "total_rows": 0}` to reset for the next batch upload.
 
-**If input/prospects.csv is empty or missing:** Write a file `output/error-YYYY-MM-DD.txt` with the message "No input file found. Skipping run." Then commit and push that file. Do not error silently.
+---
+
+### EDGE CASES
+
+**If input/prospects.csv is missing or empty:** Send an email to shadheenarman@gmail.com with subject "Sluqe Enrichment Skipped" and body: "No input file found in the repo. Upload prospects.csv to input/ and push to resume." Do not error silently.
+
+**If Google Drive is unavailable:** Log the error, skip the run, do not process leads. Do not mark any rows as processed.
+
+**If a run is interrupted mid-batch:** Do not update the progress tracker. The next run will re-process the same batch. Duplicate rows in output are acceptable; missing rows are not.
+
+**Reset:** To start a fresh batch, upload a new `input/prospects.csv` to the repo and delete or reset `sluqe-progress.json` in Google Drive to `{"last_processed_row": 0, "total_rows": 0}`.
